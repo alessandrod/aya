@@ -22,8 +22,8 @@ jobs:
 
       - name: Install headers
         run: |
-          apt -y update
-          apt -y install libc6-dev libc6-dev-{aarch64,armel}-cross
+          sudo apt -y update
+          sudo apt -y install libc6-dev libc6-dev-{arm64,armel}-cross
 
       - name: Run codegen
         run: |
