@@ -4,14 +4,13 @@ use thiserror::Error;
 use std::{
     ffi::{CStr, CString},
     io,
-    os::unix::io::RawFd,
 };
 
 use crate::{
     generated::{
         bpf_prog_type::BPF_PROG_TYPE_SCHED_CLS, TC_H_CLSACT, TC_H_MIN_EGRESS, TC_H_MIN_INGRESS,
     },
-    programs::{load_program, Link, LinkRef, ProgramData, ProgramError},
+    programs::{load_program, Link, ProgramData, ProgramError},
     sys::{
         netlink_find_filter_with_name, netlink_qdisc_add_clsact, netlink_qdisc_attach,
         netlink_qdisc_detach,
@@ -19,8 +18,10 @@ use crate::{
     util::{ifindex_from_ifname, tc_handler_make},
 };
 
+use super::define_link_wrapper;
+
 /// Traffic control attach type.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum TcAttachType {
     /// Attach to ingress.
     Ingress,
@@ -72,7 +73,7 @@ pub enum TcAttachType {
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_SCHED_CLS")]
 pub struct SchedClassifier {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<SchedClassifierLink>,
     pub(crate) name: Box<CStr>,
 }
 
@@ -91,14 +92,6 @@ pub enum TcError {
     AlreadyAttached,
 }
 
-#[derive(Debug)]
-struct TcLink {
-    if_index: i32,
-    attach_type: TcAttachType,
-    prog_fd: Option<RawFd>,
-    priority: u32,
-}
-
 impl TcAttachType {
     pub(crate) fn parent(&self) -> u32 {
         match self {
@@ -111,13 +104,13 @@ impl TcAttachType {
 
 impl SchedClassifier {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load(&mut self) -> Result<(), ProgramError> {
         load_program(BPF_PROG_TYPE_SCHED_CLS, &mut self.data)
     }
 
     /// Attaches the program to the given `interface`.
+    ///
+    /// The returned value can be used to detach, see [SchedClassifier::detach].
     ///
     /// # Errors
     ///
@@ -129,7 +122,7 @@ impl SchedClassifier {
         &mut self,
         interface: &str,
         attach_type: TcAttachType,
-    ) -> Result<LinkRef, ProgramError> {
+    ) -> Result<SchedClassifierLinkId, ProgramError> {
         let prog_fd = self.data.fd_or_err()?;
         let if_index = ifindex_from_ifname(interface)
             .map_err(|io_error| TcError::NetlinkError { io_error })?;
@@ -137,32 +130,52 @@ impl SchedClassifier {
             unsafe { netlink_qdisc_attach(if_index as i32, &attach_type, prog_fd, &self.name) }
                 .map_err(|io_error| TcError::NetlinkError { io_error })?;
 
-        Ok(self.data.link(TcLink {
+        Ok(self.data.links.insert(SchedClassifierLink(TcLink {
             if_index: if_index as i32,
             attach_type,
-            prog_fd: Some(prog_fd),
             priority,
-        }))
+        })))
+    }
+
+    /// Detaches the program.
+    ///
+    /// See [SchedClassifier::attach].
+    pub fn detach(&mut self, link_id: SchedClassifierLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
     }
 }
 
-impl Drop for TcLink {
-    fn drop(&mut self) {
-        let _ = self.detach();
-    }
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub(crate) struct TcLinkId(i32, TcAttachType, u32);
+
+#[derive(Debug)]
+struct TcLink {
+    if_index: i32,
+    attach_type: TcAttachType,
+    priority: u32,
 }
 
 impl Link for TcLink {
-    fn detach(&mut self) -> Result<(), ProgramError> {
-        if self.prog_fd.take().is_some() {
-            unsafe { netlink_qdisc_detach(self.if_index, &self.attach_type, self.priority) }
-                .map_err(|io_error| TcError::NetlinkError { io_error })?;
-            Ok(())
-        } else {
-            Err(ProgramError::AlreadyDetached)
-        }
+    type Id = TcLinkId;
+
+    fn id(&self) -> Self::Id {
+        TcLinkId(self.if_index, self.attach_type, self.priority)
+    }
+
+    fn detach(self) -> Result<(), ProgramError> {
+        unsafe { netlink_qdisc_detach(self.if_index, &self.attach_type, self.priority) }
+            .map_err(|io_error| TcError::NetlinkError { io_error })?;
+        Ok(())
     }
 }
+
+define_link_wrapper!(
+    SchedClassifierLink,
+    /// The type returned by [SchedClassifier::attach]. Can be passed to [SchedClassifier::detach].
+    SchedClassifierLinkId,
+    TcLink,
+    TcLinkId
+);
 
 /// Add the `clasct` qdisc to the given interface.
 ///

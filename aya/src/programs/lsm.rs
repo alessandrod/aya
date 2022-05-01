@@ -2,8 +2,10 @@
 use crate::{
     generated::{bpf_attach_type::BPF_LSM_MAC, bpf_prog_type::BPF_PROG_TYPE_LSM},
     obj::btf::{Btf, BtfKind},
-    programs::{load_program, utils::attach_raw_tracepoint, LinkRef, ProgramData, ProgramError},
+    programs::{load_program, utils::attach_raw_tracepoint, ProgramData, ProgramError},
 };
+
+use super::{define_link_wrapper, FdLink, FdLinkId};
 
 /// A program that attaches to Linux LSM hooks. Used to implement security policy and
 /// audit logging.
@@ -46,13 +48,11 @@ use crate::{
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_LSM")]
 pub struct Lsm {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<LsmLink>,
 }
 
 impl Lsm {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     ///
     /// # Arguments
     ///
@@ -67,7 +67,24 @@ impl Lsm {
     }
 
     /// Attaches the program.
-    pub fn attach(&mut self) -> Result<LinkRef, ProgramError> {
+    ///
+    /// The returned value can be used to detach, see [Lsm::detach].
+    pub fn attach(&mut self) -> Result<LsmLinkId, ProgramError> {
         attach_raw_tracepoint(&mut self.data, None)
     }
+
+    /// Detaches the program.
+    ///
+    /// See [Lsm::attach].
+    pub fn detach(&mut self, link_id: LsmLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
+    }
 }
+
+define_link_wrapper!(
+    LsmLink,
+    /// The type returned by [Lsm::attach]. Can be passed to [Lsm::detach].
+    LsmLinkId,
+    FdLink,
+    FdLinkId
+);

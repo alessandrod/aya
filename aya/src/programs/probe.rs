@@ -8,11 +8,12 @@ use std::{
 use crate::{
     programs::{
         kprobe::KProbeError, perf_attach, perf_attach_debugfs,
-        trace_point::read_sys_fs_trace_point_id, uprobe::UProbeError, LinkRef, ProgramData,
-        ProgramError,
+        trace_point::read_sys_fs_trace_point_id, uprobe::UProbeError, ProgramData, ProgramError,
     },
     sys::{kernel_version, perf_event_open_probe, perf_event_open_trace_point},
 };
+
+use super::{perf_attach::PerfLink, Link};
 
 /// Kind of probe program
 #[derive(Debug, Copy, Clone)]
@@ -36,13 +37,13 @@ impl ProbeKind {
     }
 }
 
-pub(crate) fn attach(
-    program_data: &mut ProgramData,
+pub(crate) fn attach<T: Link + From<PerfLink>>(
+    program_data: &mut ProgramData<T>,
     kind: ProbeKind,
     fn_name: &str,
     offset: u64,
     pid: Option<pid_t>,
-) -> Result<LinkRef, ProgramError> {
+) -> Result<T::Id, ProgramError> {
     // https://github.com/torvalds/linux/commit/e12f03d7031a977356e3d7b75a68c2185ff8d155
     // Use debugfs to create probe
     let k_ver = kernel_version().unwrap();

@@ -3,8 +3,10 @@ use std::ffi::CString;
 
 use crate::{
     generated::bpf_prog_type::BPF_PROG_TYPE_RAW_TRACEPOINT,
-    programs::{load_program, utils::attach_raw_tracepoint, LinkRef, ProgramData, ProgramError},
+    programs::{load_program, utils::attach_raw_tracepoint, ProgramData, ProgramError},
 };
+
+use super::{define_link_wrapper, FdLink, FdLinkId};
 
 /// A program that can be attached at a pre-defined kernel trace point, but also
 /// has an access to kernel internal arguments of trace points, which
@@ -33,20 +35,35 @@ use crate::{
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_RAW_TRACEPOINT")]
 pub struct RawTracePoint {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<RawTracePointLink>,
 }
 
 impl RawTracePoint {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load(&mut self) -> Result<(), ProgramError> {
         load_program(BPF_PROG_TYPE_RAW_TRACEPOINT, &mut self.data)
     }
 
     /// Attaches the program to the given tracepoint.
-    pub fn attach(&mut self, tp_name: &str) -> Result<LinkRef, ProgramError> {
+    ///
+    /// The returned value can be used to detach, see [RawTracePoint::detach].
+    pub fn attach(&mut self, tp_name: &str) -> Result<RawTracePointLinkId, ProgramError> {
         let tp_name_c = CString::new(tp_name).unwrap();
         attach_raw_tracepoint(&mut self.data, Some(&tp_name_c))
     }
+
+    /// Detaches from a tracepoint.
+    ///
+    /// See [RawTracePoint::attach].
+    pub fn detach(&mut self, link_id: RawTracePointLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
+    }
 }
+
+define_link_wrapper!(
+    RawTracePointLink,
+    /// The type returned by [RawTracePoint::attach]. Can be passed to [RawTracePoint::detach].
+    RawTracePointLinkId,
+    FdLink,
+    FdLinkId
+);

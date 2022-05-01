@@ -1,9 +1,12 @@
 //! fexit programs.
+
 use crate::{
     generated::{bpf_attach_type::BPF_TRACE_FEXIT, bpf_prog_type::BPF_PROG_TYPE_TRACING},
     obj::btf::{Btf, BtfKind},
-    programs::{load_program, utils::attach_raw_tracepoint, LinkRef, ProgramData, ProgramError},
+    programs::{load_program, utils::attach_raw_tracepoint, ProgramData, ProgramError},
 };
+
+use super::{define_link_wrapper, FdLink, FdLinkId};
 
 /// A program that can be attached to the exit point of (almost) anny kernel
 /// function.
@@ -43,13 +46,11 @@ use crate::{
 #[doc(alias = "BPF_TRACE_FEXIT")]
 #[doc(alias = "BPF_PROG_TYPE_TRACING")]
 pub struct FExit {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<FExitLink>,
 }
 
 impl FExit {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     ///
     /// Loads the program so it's executed when the kernel function `fn_name`
     /// is exited. The `btf` argument must contain the BTF info for the running
@@ -60,8 +61,25 @@ impl FExit {
         load_program(BPF_PROG_TYPE_TRACING, &mut self.data)
     }
 
-    /// Attaches the program
-    pub fn attach(&mut self) -> Result<LinkRef, ProgramError> {
+    /// Attaches the program.
+    ///
+    /// The returned value can be used to detach, see [FExit::detach].
+    pub fn attach(&mut self) -> Result<FExitLinkId, ProgramError> {
         attach_raw_tracepoint(&mut self.data, None)
     }
+
+    /// Detaches the program.
+    ///
+    /// See [FExit::attach].
+    pub fn detach(&mut self, link_id: FExitLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
+    }
 }
+
+define_link_wrapper!(
+    FExitLink,
+    /// The type returned by [FExit::attach]. Can be passed to [FExit::detach].
+    FExitLinkId,
+    FdLink,
+    FdLinkId
+);

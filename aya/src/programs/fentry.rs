@@ -1,9 +1,12 @@
 //! fentry programs.
+
 use crate::{
     generated::{bpf_attach_type::BPF_TRACE_FENTRY, bpf_prog_type::BPF_PROG_TYPE_TRACING},
     obj::btf::{Btf, BtfKind},
-    programs::{load_program, utils::attach_raw_tracepoint, LinkRef, ProgramData, ProgramError},
+    programs::{load_program, utils::attach_raw_tracepoint, ProgramData, ProgramError},
 };
+
+use super::{define_link_wrapper, FdLink, FdLinkId};
 
 /// A program that can be attached to the entry point of (almost) any kernel
 /// function.
@@ -43,13 +46,11 @@ use crate::{
 #[doc(alias = "BPF_TRACE_FENTRY")]
 #[doc(alias = "BPF_PROG_TYPE_TRACING")]
 pub struct FEntry {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<FEntryLink>,
 }
 
 impl FEntry {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     ///
     /// Loads the program so it's executed when the kernel function `fn_name`
     /// is entered. The `btf` argument must contain the BTF info for the
@@ -60,8 +61,25 @@ impl FEntry {
         load_program(BPF_PROG_TYPE_TRACING, &mut self.data)
     }
 
-    /// Attaches the program
-    pub fn attach(&mut self) -> Result<LinkRef, ProgramError> {
+    /// Attaches the program.
+    ///
+    /// The returned value can be used to detach, see [FEntry::detach].
+    pub fn attach(&mut self) -> Result<FEntryLinkId, ProgramError> {
         attach_raw_tracepoint(&mut self.data, None)
     }
+
+    /// Detaches the program.
+    ///
+    /// See [FEntry::attach].
+    pub fn detach(&mut self, link_id: FEntryLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
+    }
 }
+
+define_link_wrapper!(
+    FEntryLink,
+    /// The type returned by [FEntry::attach]. Can be passed to [FEntry::detach].
+    FEntryLinkId,
+    FdLink,
+    FdLinkId
+);

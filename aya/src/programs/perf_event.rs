@@ -10,7 +10,11 @@ pub use crate::generated::{
     perf_hw_cache_id, perf_hw_cache_op_id, perf_hw_cache_op_result_id, perf_hw_id, perf_sw_ids,
 };
 
-use super::{load_program, perf_attach, LinkRef, ProgramData, ProgramError};
+use super::{
+    load_program, perf_attach,
+    perf_attach::{PerfLink, PerfLinkId},
+    ProgramData, ProgramError,
+};
 
 /// The type of perf event
 #[repr(u32)]
@@ -112,13 +116,11 @@ pub enum PerfEventScope {
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_PERF_EVENT")]
 pub struct PerfEvent {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<PerfLink>,
 }
 
 impl PerfEvent {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load(&mut self) -> Result<(), ProgramError> {
         load_program(BPF_PROG_TYPE_PERF_EVENT, &mut self.data)
     }
@@ -128,13 +130,15 @@ impl PerfEvent {
     /// The possible values and encoding of the `config` argument depends on the
     /// `perf_type`. See `perf_sw_ids`, `perf_hw_id`, `perf_hw_cache_id`,
     /// `perf_hw_cache_op_id` and `perf_hw_cache_op_result_id`.
+    ///
+    /// The returned value can be used to detach, see [PerfEvent::detach].
     pub fn attach(
         &mut self,
         perf_type: PerfTypeId,
         config: u64,
         scope: PerfEventScope,
         sample_policy: SamplePolicy,
-    ) -> Result<LinkRef, ProgramError> {
+    ) -> Result<PerfLinkId, ProgramError> {
         let (sample_period, sample_frequency) = match sample_policy {
             SamplePolicy::Period(period) => (period, None),
             SamplePolicy::Frequency(frequency) => (0, Some(frequency)),
@@ -162,5 +166,12 @@ impl PerfEvent {
         })? as i32;
 
         perf_attach(&mut self.data, fd)
+    }
+
+    /// Detaches the program.
+    ///
+    /// See [PerfEvent::attach].
+    pub fn detach(&mut self, link_id: PerfLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
     }
 }

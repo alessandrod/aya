@@ -405,57 +405,58 @@ impl<'a> BpfLoader<'a> {
                 } else {
                     None
                 };
-                let data = ProgramData {
-                    name: prog_name,
-                    obj,
-                    fd: None,
-                    links: Vec::new(),
-                    expected_attach_type: None,
-                    attach_btf_obj_fd: None,
-                    attach_btf_id: None,
-                    attach_prog_fd: None,
-                    btf_fd,
-                };
+                let section = obj.section.clone();
+
                 let program = if self.extensions.contains(name.as_str()) {
-                    Program::Extension(Extension { data })
+                    Program::Extension(Extension {
+                        data: ProgramData::new(prog_name, obj, btf_fd),
+                    })
                 } else {
-                    match &data.obj.section {
+                    match &section {
                         ProgramSection::KProbe { .. } => Program::KProbe(KProbe {
-                            data,
+                            data: ProgramData::new(prog_name, obj, btf_fd),
                             kind: ProbeKind::KProbe,
                         }),
                         ProgramSection::KRetProbe { .. } => Program::KProbe(KProbe {
-                            data,
+                            data: ProgramData::new(prog_name, obj, btf_fd),
                             kind: ProbeKind::KRetProbe,
                         }),
                         ProgramSection::UProbe { .. } => Program::UProbe(UProbe {
-                            data,
+                            data: ProgramData::new(prog_name, obj, btf_fd),
                             kind: ProbeKind::UProbe,
                         }),
                         ProgramSection::URetProbe { .. } => Program::UProbe(UProbe {
-                            data,
+                            data: ProgramData::new(prog_name, obj, btf_fd),
                             kind: ProbeKind::URetProbe,
                         }),
-                        ProgramSection::TracePoint { .. } => {
-                            Program::TracePoint(TracePoint { data })
-                        }
+                        ProgramSection::TracePoint { .. } => Program::TracePoint(TracePoint {
+                            data: ProgramData::new(prog_name, obj, btf_fd),
+                        }),
                         ProgramSection::SocketFilter { .. } => {
-                            Program::SocketFilter(SocketFilter { data })
+                            Program::SocketFilter(SocketFilter {
+                                data: ProgramData::new(prog_name, obj, btf_fd),
+                            })
                         }
-                        ProgramSection::Xdp { .. } => Program::Xdp(Xdp { data }),
-                        ProgramSection::SkMsg { .. } => Program::SkMsg(SkMsg { data }),
+                        ProgramSection::Xdp { .. } => Program::Xdp(Xdp {
+                            data: ProgramData::new(prog_name, obj, btf_fd),
+                        }),
+                        ProgramSection::SkMsg { .. } => Program::SkMsg(SkMsg {
+                            data: ProgramData::new(prog_name, obj, btf_fd),
+                        }),
                         ProgramSection::SkSkbStreamParser { .. } => Program::SkSkb(SkSkb {
-                            data,
+                            data: ProgramData::new(prog_name, obj, btf_fd),
                             kind: SkSkbKind::StreamParser,
                         }),
                         ProgramSection::SkSkbStreamVerdict { .. } => Program::SkSkb(SkSkb {
-                            data,
+                            data: ProgramData::new(prog_name, obj, btf_fd),
                             kind: SkSkbKind::StreamVerdict,
                         }),
-                        ProgramSection::SockOps { .. } => Program::SockOps(SockOps { data }),
+                        ProgramSection::SockOps { .. } => Program::SockOps(SockOps {
+                            data: ProgramData::new(prog_name, obj, btf_fd),
+                        }),
                         ProgramSection::SchedClassifier { .. } => {
                             Program::SchedClassifier(SchedClassifier {
-                                data,
+                                data: ProgramData::new(prog_name, obj, btf_fd),
                                 name: unsafe {
                                     CString::from_vec_unchecked(Vec::from(name.clone()))
                                         .into_boxed_c_str()
@@ -463,29 +464,45 @@ impl<'a> BpfLoader<'a> {
                             })
                         }
                         ProgramSection::CgroupSkb { .. } => Program::CgroupSkb(CgroupSkb {
-                            data,
+                            data: ProgramData::new(prog_name, obj, btf_fd),
                             expected_attach_type: None,
                         }),
                         ProgramSection::CgroupSkbIngress { .. } => Program::CgroupSkb(CgroupSkb {
-                            data,
+                            data: ProgramData::new(prog_name, obj, btf_fd),
                             expected_attach_type: Some(CgroupSkbAttachType::Ingress),
                         }),
                         ProgramSection::CgroupSkbEgress { .. } => Program::CgroupSkb(CgroupSkb {
-                            data,
+                            data: ProgramData::new(prog_name, obj, btf_fd),
                             expected_attach_type: Some(CgroupSkbAttachType::Egress),
                         }),
-                        ProgramSection::LircMode2 { .. } => Program::LircMode2(LircMode2 { data }),
-                        ProgramSection::PerfEvent { .. } => Program::PerfEvent(PerfEvent { data }),
+                        ProgramSection::LircMode2 { .. } => Program::LircMode2(LircMode2 {
+                            data: ProgramData::new(prog_name, obj, btf_fd),
+                        }),
+                        ProgramSection::PerfEvent { .. } => Program::PerfEvent(PerfEvent {
+                            data: ProgramData::new(prog_name, obj, btf_fd),
+                        }),
                         ProgramSection::RawTracePoint { .. } => {
-                            Program::RawTracePoint(RawTracePoint { data })
+                            Program::RawTracePoint(RawTracePoint {
+                                data: ProgramData::new(prog_name, obj, btf_fd),
+                            })
                         }
-                        ProgramSection::Lsm { .. } => Program::Lsm(Lsm { data }),
+                        ProgramSection::Lsm { .. } => Program::Lsm(Lsm {
+                            data: ProgramData::new(prog_name, obj, btf_fd),
+                        }),
                         ProgramSection::BtfTracePoint { .. } => {
-                            Program::BtfTracePoint(BtfTracePoint { data })
+                            Program::BtfTracePoint(BtfTracePoint {
+                                data: ProgramData::new(prog_name, obj, btf_fd),
+                            })
                         }
-                        ProgramSection::FEntry { .. } => Program::FEntry(FEntry { data }),
-                        ProgramSection::FExit { .. } => Program::FExit(FExit { data }),
-                        ProgramSection::Extension { .. } => Program::Extension(Extension { data }),
+                        ProgramSection::FEntry { .. } => Program::FEntry(FEntry {
+                            data: ProgramData::new(prog_name, obj, btf_fd),
+                        }),
+                        ProgramSection::FExit { .. } => Program::FExit(FExit {
+                            data: ProgramData::new(prog_name, obj, btf_fd),
+                        }),
+                        ProgramSection::Extension { .. } => Program::Extension(Extension {
+                            data: ProgramData::new(prog_name, obj, btf_fd),
+                        }),
                     }
                 };
                 (name, program)

@@ -4,9 +4,11 @@ use crate::{
         bpf_prog_type::BPF_PROG_TYPE_SK_SKB,
     },
     maps::sock::SocketMap,
-    programs::{load_program, LinkRef, ProgAttachLink, ProgramData, ProgramError},
+    programs::{load_program, ProgAttachLink, ProgramData, ProgramError},
     sys::bpf_prog_attach,
 };
+
+use super::{define_link_wrapper, ProgAttachLinkId};
 
 /// The kind of [`SkSkb`] program.
 #[derive(Copy, Clone, Debug)]
@@ -48,20 +50,20 @@ pub enum SkSkbKind {
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_SK_SKB")]
 pub struct SkSkb {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<SkSkbLink>,
     pub(crate) kind: SkSkbKind,
 }
 
 impl SkSkb {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load(&mut self) -> Result<(), ProgramError> {
         load_program(BPF_PROG_TYPE_SK_SKB, &mut self.data)
     }
 
     /// Attaches the program to the given socket map.
-    pub fn attach(&mut self, map: &dyn SocketMap) -> Result<LinkRef, ProgramError> {
+    ///
+    /// The returned value can be used to detach, see [SkSkb::detach].
+    pub fn attach(&mut self, map: &dyn SocketMap) -> Result<SkSkbLinkId, ProgramError> {
         let prog_fd = self.data.fd_or_err()?;
         let map_fd = map.fd_or_err()?;
 
@@ -77,6 +79,22 @@ impl SkSkb {
         })?;
         Ok(self
             .data
-            .link(ProgAttachLink::new(prog_fd, map_fd, attach_type)))
+            .links
+            .insert(SkSkbLink(ProgAttachLink::new(prog_fd, map_fd, attach_type))))
+    }
+
+    /// Detaches the program.
+    ///
+    /// See [SkSkb::attach].
+    pub fn detach(&mut self, link_id: SkSkbLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
     }
 }
+
+define_link_wrapper!(
+    SkSkbLink,
+    /// The type returned by [SkSkb::attach]. Can be passed to [SkSkb::detach].
+    SkSkbLinkId,
+    ProgAttachLink,
+    ProgAttachLinkId
+);

@@ -7,8 +7,13 @@ use crate::{
     programs::{
         load_program,
         probe::{attach, ProbeKind},
-        LinkRef, ProgramData, ProgramError,
+        ProgramData, ProgramError,
     },
+};
+
+use super::{
+    define_link_wrapper,
+    perf_attach::{PerfLink, PerfLinkId},
 };
 
 /// A kernel probe.
@@ -38,14 +43,12 @@ use crate::{
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_KPROBE")]
 pub struct KProbe {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<KProbeLink>,
     pub(crate) kind: ProbeKind,
 }
 
 impl KProbe {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load(&mut self) -> Result<(), ProgramError> {
         load_program(BPF_PROG_TYPE_KPROBE, &mut self.data)
     }
@@ -65,10 +68,27 @@ impl KProbe {
     /// If the program is a `kprobe`, it is attached to the *start* address of the target function.
     /// Conversely if the program is a `kretprobe`, it is attached to the return address of the
     /// target function.
-    pub fn attach(&mut self, fn_name: &str, offset: u64) -> Result<LinkRef, ProgramError> {
+    ///
+    /// The returned value can be used to detach from the given function, see [KProbe::detach].
+    pub fn attach(&mut self, fn_name: &str, offset: u64) -> Result<KProbeLinkId, ProgramError> {
         attach(&mut self.data, self.kind, fn_name, offset, None)
     }
+
+    /// Detaches the program.
+    ///
+    /// See [KProbe::attach].
+    pub fn detach(&mut self, link_id: KProbeLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
+    }
 }
+
+define_link_wrapper!(
+    KProbeLink,
+    /// The type returned by [KProbe::attach]. Can be passed to [KProbe::detach].
+    KProbeLinkId,
+    PerfLink,
+    PerfLinkId
+);
 
 /// The type returned when attaching a [`KProbe`] fails.
 #[derive(Debug, Error)]

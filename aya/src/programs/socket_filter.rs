@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     generated::{bpf_prog_type::BPF_PROG_TYPE_SOCKET_FILTER, SO_ATTACH_BPF, SO_DETACH_BPF},
-    programs::{load_program, Link, LinkRef, ProgramData, ProgramError},
+    programs::{load_program, Link, ProgramData, ProgramError},
 };
 
 /// The type returned when attaching a [`SocketFilter`] fails.
@@ -60,19 +60,19 @@ pub enum SocketFilterError {
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_SOCKET_FILTER")]
 pub struct SocketFilter {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<SocketFilterLink>,
 }
 
 impl SocketFilter {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load(&mut self) -> Result<(), ProgramError> {
         load_program(BPF_PROG_TYPE_SOCKET_FILTER, &mut self.data)
     }
 
     /// Attaches the filter on the given socket.
-    pub fn attach<T: AsRawFd>(&mut self, socket: T) -> Result<LinkRef, ProgramError> {
+    ///
+    /// The returned value can be used to detach from the socket, see [SocketFilter::detach].
+    pub fn attach<T: AsRawFd>(&mut self, socket: T) -> Result<SocketFilterLinkId, ProgramError> {
         let prog_fd = self.data.fd_or_err()?;
         let socket = socket.as_raw_fd();
 
@@ -92,40 +92,44 @@ impl SocketFilter {
             .into());
         }
 
-        Ok(self.data.link(SocketFilterLink {
-            socket,
-            prog_fd: Some(prog_fd),
-        }))
+        Ok(self.data.links.insert(SocketFilterLink { socket, prog_fd }))
+    }
+
+    /// Detaches the program.
+    ///
+    /// See [SocketFilter::attach].
+    pub fn detach(&mut self, link_id: SocketFilterLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
     }
 }
 
+/// The type returned by [SocketFilter::attach]. Can be passed to [SocketFilter::detach].
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub struct SocketFilterLinkId(RawFd, RawFd);
+
 #[derive(Debug)]
-struct SocketFilterLink {
+pub(crate) struct SocketFilterLink {
     socket: RawFd,
-    prog_fd: Option<RawFd>,
+    prog_fd: RawFd,
 }
 
 impl Link for SocketFilterLink {
-    fn detach(&mut self) -> Result<(), ProgramError> {
-        if let Some(fd) = self.prog_fd.take() {
-            unsafe {
-                setsockopt(
-                    self.socket,
-                    SOL_SOCKET,
-                    SO_DETACH_BPF as i32,
-                    &fd as *const _ as *const _,
-                    mem::size_of::<RawFd>() as u32,
-                );
-            }
-            Ok(())
-        } else {
-            Err(ProgramError::AlreadyDetached)
-        }
-    }
-}
+    type Id = SocketFilterLinkId;
 
-impl Drop for SocketFilterLink {
-    fn drop(&mut self) {
-        let _ = self.detach();
+    fn id(&self) -> Self::Id {
+        SocketFilterLinkId(self.socket, self.prog_fd)
+    }
+
+    fn detach(self) -> Result<(), ProgramError> {
+        unsafe {
+            setsockopt(
+                self.socket,
+                SOL_SOCKET,
+                SO_DETACH_BPF as i32,
+                &self.prog_fd as *const _ as *const _,
+                mem::size_of::<RawFd>() as u32,
+            );
+        }
+        Ok(())
     }
 }

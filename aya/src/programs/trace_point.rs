@@ -3,7 +3,11 @@ use thiserror::Error;
 
 use crate::{generated::bpf_prog_type::BPF_PROG_TYPE_TRACEPOINT, sys::perf_event_open_trace_point};
 
-use super::{load_program, perf_attach, LinkRef, ProgramData, ProgramError};
+use super::{
+    define_link_wrapper, load_program,
+    perf_attach::{perf_attach, PerfLink, PerfLinkId},
+    ProgramData, ProgramError,
+};
 
 /// The type returned when attaching a [`TracePoint`] fails.
 #[derive(Debug, Error)]
@@ -55,13 +59,11 @@ pub enum TracePointError {
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_TRACEPOINT")]
 pub struct TracePoint {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<TracePointLink>,
 }
 
 impl TracePoint {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load(&mut self) -> Result<(), ProgramError> {
         load_program(BPF_PROG_TYPE_TRACEPOINT, &mut self.data)
     }
@@ -70,7 +72,9 @@ impl TracePoint {
     ///
     /// For a list of the available event categories and names, see
     /// `/sys/kernel/debug/tracing/events`.
-    pub fn attach(&mut self, category: &str, name: &str) -> Result<LinkRef, ProgramError> {
+    ///
+    /// The returned value can be used to detach, see [TracePoint::detach].
+    pub fn attach(&mut self, category: &str, name: &str) -> Result<TracePointLinkId, ProgramError> {
         let id = read_sys_fs_trace_point_id(category, name)?;
         let fd = perf_event_open_trace_point(id, None).map_err(|(_code, io_error)| {
             ProgramError::SyscallError {
@@ -81,7 +85,22 @@ impl TracePoint {
 
         perf_attach(&mut self.data, fd)
     }
+
+    /// Detaches from a trace point.
+    ///
+    /// See [TracePoint::attach].
+    pub fn detach(&mut self, link_id: TracePointLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
+    }
 }
+
+define_link_wrapper!(
+    TracePointLink,
+    /// The type returned by [TracePoint::attach]. Can be passed to [TracePoint::detach].
+    TracePointLinkId,
+    PerfLink,
+    PerfLinkId
+);
 
 pub(crate) fn read_sys_fs_trace_point_id(
     category: &str,

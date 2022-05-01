@@ -18,8 +18,13 @@ use crate::{
     programs::{
         load_program,
         probe::{attach, ProbeKind},
-        LinkRef, ProgramData, ProgramError,
+        ProgramData, ProgramError,
     },
+};
+
+use super::{
+    define_link_wrapper,
+    perf_attach::{PerfLink, PerfLinkId},
 };
 
 const LD_SO_CACHE_FILE: &str = "/etc/ld.so.cache";
@@ -40,14 +45,12 @@ const LD_SO_CACHE_HEADER: &str = "glibc-ld.so.cache1.1";
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_KPROBE")]
 pub struct UProbe {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<UProbeLink>,
     pub(crate) kind: ProbeKind,
 }
 
 impl UProbe {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load(&mut self) -> Result<(), ProgramError> {
         load_program(BPF_PROG_TYPE_KPROBE, &mut self.data)
     }
@@ -69,16 +72,17 @@ impl UProbe {
     /// a library name (eg: `"libc"`).
     ///
     /// If the program is an `uprobe`, it is attached to the *start* address of the target
-    /// function.  Instead if the program is a `kretprobe`, it is attached to the return address of
+    /// function.  Instead if the program is a `uretprobe`, it is attached to the return address of
     /// the target function.
     ///
+    /// The returned value can be used to detach, see [UProbe::detach].
     pub fn attach<T: AsRef<Path>>(
         &mut self,
         fn_name: Option<&str>,
         offset: u64,
         target: T,
         pid: Option<pid_t>,
-    ) -> Result<LinkRef, ProgramError> {
+    ) -> Result<UProbeLinkId, ProgramError> {
         let target = target.as_ref();
         let target_str = &*target.as_os_str().to_string_lossy();
 
@@ -121,7 +125,22 @@ impl UProbe {
 
         attach(&mut self.data, self.kind, &path, sym_offset + offset, pid)
     }
+
+    /// Detaches the program.
+    ///
+    /// See [UProbe::attach].
+    pub fn detach(&mut self, link_id: UProbeLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
+    }
 }
+
+define_link_wrapper!(
+    UProbeLink,
+    /// The type returned by [UProbe::attach]. Can be passed to [UProbe::detach].
+    UProbeLinkId,
+    PerfLink,
+    PerfLinkId
+);
 
 /// The type returned when attaching an [`UProbe`] fails.
 #[derive(Debug, Error)]

@@ -1,15 +1,19 @@
-use std::os::unix::prelude::{AsRawFd, RawFd};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    os::unix::prelude::{AsRawFd, RawFd},
+};
 
 use crate::{
     generated::{
         bpf_attach_type::{BPF_CGROUP_INET_EGRESS, BPF_CGROUP_INET_INGRESS},
         bpf_prog_type::BPF_PROG_TYPE_CGROUP_SKB,
     },
-    programs::{load_program, LinkRef, ProgAttachLink, ProgramData, ProgramError},
+    programs::{load_program, ProgAttachLink, ProgramData, ProgramError},
     sys::{bpf_link_create, bpf_prog_attach, kernel_version},
 };
 
-use super::FdLink;
+use super::{FdLink, Link};
 
 /// A program used to inspect or filter network activity for a given cgroup.
 ///
@@ -51,14 +55,12 @@ use super::FdLink;
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_CGROUP_SKB")]
 pub struct CgroupSkb {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<CgroupSkbLink>,
     pub(crate) expected_attach_type: Option<CgroupSkbAttachType>,
 }
 
 impl CgroupSkb {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load(&mut self) -> Result<(), ProgramError> {
         load_program(BPF_PROG_TYPE_CGROUP_SKB, &mut self.data)
     }
@@ -74,11 +76,13 @@ impl CgroupSkb {
     }
 
     /// Attaches the program to the given cgroup.
+    ///
+    /// The returned value can be used to detach, see [CgroupSkb::detach].
     pub fn attach<T: AsRawFd>(
         &mut self,
         cgroup: T,
         attach_type: CgroupSkbAttachType,
-    ) -> Result<LinkRef, ProgramError> {
+    ) -> Result<CgroupSkbLinkId, ProgramError> {
         let prog_fd = self.data.fd_or_err()?;
         let cgroup_fd = cgroup.as_raw_fd();
 
@@ -94,7 +98,10 @@ impl CgroupSkb {
                     io_error,
                 },
             )? as RawFd;
-            Ok(self.data.link(FdLink { fd: Some(link_fd) }))
+            Ok(self
+                .data
+                .links
+                .insert(CgroupSkbLink::Fd(FdLink::new(link_fd))))
         } else {
             bpf_prog_attach(prog_fd, cgroup_fd, attach_type).map_err(|(_, io_error)| {
                 ProgramError::SyscallError {
@@ -105,7 +112,50 @@ impl CgroupSkb {
 
             Ok(self
                 .data
-                .link(ProgAttachLink::new(prog_fd, cgroup_fd, attach_type)))
+                .links
+                .insert(CgroupSkbLink::ProgAttach(ProgAttachLink::new(
+                    prog_fd,
+                    cgroup_fd,
+                    attach_type,
+                ))))
+        }
+    }
+
+    /// Detaches the program.
+    ///
+    /// See [CgroupSkb::attach].
+    pub fn detach(&mut self, link_id: CgroupSkbLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
+    }
+}
+
+/// The type returned by [CgroupSkb::attach]. Can be passed to [CgroupSkb::detach].
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub struct CgroupSkbLinkId(u64);
+
+#[derive(Debug)]
+pub(crate) enum CgroupSkbLink {
+    Fd(FdLink),
+    ProgAttach(ProgAttachLink),
+}
+
+impl Link for CgroupSkbLink {
+    type Id = CgroupSkbLinkId;
+
+    fn id(&self) -> Self::Id {
+        let mut s = DefaultHasher::new();
+        match self {
+            CgroupSkbLink::Fd(fd) => fd.id().hash(&mut s),
+            CgroupSkbLink::ProgAttach(p) => p.id().hash(&mut s),
+        }
+
+        CgroupSkbLinkId(s.finish())
+    }
+
+    fn detach(self) -> Result<(), ProgramError> {
+        match self {
+            CgroupSkbLink::Fd(fd) => fd.detach(),
+            CgroupSkbLink::ProgAttach(p) => p.detach(),
         }
     }
 }

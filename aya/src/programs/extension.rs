@@ -6,10 +6,12 @@ use object::Endianness;
 use crate::{
     generated::{bpf_attach_type::BPF_CGROUP_INET_INGRESS, bpf_prog_type::BPF_PROG_TYPE_EXT},
     obj::btf::BtfKind,
-    programs::{load_program, FdLink, LinkRef, ProgramData, ProgramError},
+    programs::{load_program, FdLink, ProgramData, ProgramError},
     sys::{self, bpf_link_create},
     Btf,
 };
+
+use super::{define_link_wrapper, FdLinkId};
 
 /// The type returned when loading or attaching an [`Extension`] fails
 #[derive(Debug, Error)]
@@ -48,7 +50,7 @@ pub enum ExtensionError {
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_EXT")]
 pub struct Extension {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<ExtensionLink>,
 }
 
 impl Extension {
@@ -63,8 +65,6 @@ impl Extension {
     /// The extension code will be loaded but inactive until it's attached.
     /// There are no restrictions on what functions may be replaced, so you could replace
     /// the main entry point of your program with an extension.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load<T: AsRawFd>(&mut self, program: T, func_name: &str) -> Result<(), ProgramError> {
         let target_prog_fd = program.as_raw_fd();
 
@@ -122,11 +122,13 @@ impl Extension {
         load_program(BPF_PROG_TYPE_EXT, &mut self.data)
     }
 
-    /// Attaches the extension
+    /// Attaches the extension.
     ///
     /// Attaches the extension effectively replacing the original target function.
-    /// Detaching the returned link restores the original function.
-    pub fn attach(&mut self) -> Result<LinkRef, ProgramError> {
+    ///
+    /// The returned value can be used to detach the extension and restore the
+    /// original function, see [Extension::detach].
+    pub fn attach(&mut self) -> Result<ExtensionLinkId, ProgramError> {
         let prog_fd = self.data.fd_or_err()?;
         let target_fd = self.data.attach_prog_fd.ok_or(ProgramError::NotLoaded)?;
         let btf_id = self.data.attach_btf_id.ok_or(ProgramError::NotLoaded)?;
@@ -136,6 +138,22 @@ impl Extension {
                 call: "bpf_link_create".to_owned(),
                 io_error,
             })? as RawFd;
-        Ok(self.data.link(FdLink { fd: Some(link_fd) }))
+        Ok(self.data.links.insert(ExtensionLink(FdLink::new(link_fd))))
+    }
+
+    /// Detaches the extension.
+    ///
+    /// Detaching restore the original code overridden by the extension program.
+    /// See [Extension::attach].
+    pub fn detach(&mut self, link_id: ExtensionLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
     }
 }
+
+define_link_wrapper!(
+    ExtensionLink,
+    /// The type returned by [Extension::attach]. Can be passed to [Extension::detach].
+    ExtensionLinkId,
+    FdLink,
+    FdLinkId
+);

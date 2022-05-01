@@ -2,8 +2,10 @@
 use crate::{
     generated::{bpf_attach_type::BPF_TRACE_RAW_TP, bpf_prog_type::BPF_PROG_TYPE_TRACING},
     obj::btf::{Btf, BtfKind},
-    programs::{load_program, utils::attach_raw_tracepoint, LinkRef, ProgramData, ProgramError},
+    programs::{load_program, utils::attach_raw_tracepoint, ProgramData, ProgramError},
 };
+
+use super::{define_link_wrapper, FdLink, FdLinkId};
 
 /// Marks a function as a [BTF-enabled raw tracepoint][1] eBPF program that can be attached at
 /// a pre-defined kernel trace point.
@@ -44,13 +46,11 @@ use crate::{
 #[doc(alias = "BPF_TRACE_RAW_TP")]
 #[doc(alias = "BPF_PROG_TYPE_TRACING")]
 pub struct BtfTracePoint {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<BtfTracePointLink>,
 }
 
 impl BtfTracePoint {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     ///
     /// # Arguments
     ///
@@ -65,7 +65,24 @@ impl BtfTracePoint {
     }
 
     /// Attaches the program.
-    pub fn attach(&mut self) -> Result<LinkRef, ProgramError> {
+    ///
+    /// The returned value can be used to detach, see [BtfTracePoint::detach].
+    pub fn attach(&mut self) -> Result<BtfTracePointLinkId, ProgramError> {
         attach_raw_tracepoint(&mut self.data, None)
     }
+
+    /// Detaches the program.
+    ///
+    /// See [BtfTracePoint::attach].
+    pub fn detach(&mut self, link_id: BtfTracePointLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
+    }
 }
+
+define_link_wrapper!(
+    BtfTracePointLink,
+    /// The type returned by [BtfTracePoint::attach]. Can be passed to [BtfTracePoint::detach].
+    BtfTracePointLinkId,
+    FdLink,
+    FdLinkId
+);

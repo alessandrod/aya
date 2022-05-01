@@ -1,6 +1,12 @@
 use bitflags;
 use libc::if_nametoindex;
-use std::{ffi::CString, io, os::unix::io::RawFd};
+use std::{
+    collections::hash_map::DefaultHasher,
+    ffi::CString,
+    hash::{Hash, Hasher},
+    io,
+    os::unix::io::RawFd,
+};
 use thiserror::Error;
 
 use crate::{
@@ -10,7 +16,7 @@ use crate::{
         XDP_FLAGS_DRV_MODE, XDP_FLAGS_HW_MODE, XDP_FLAGS_REPLACE, XDP_FLAGS_SKB_MODE,
         XDP_FLAGS_UPDATE_IF_NOEXIST,
     },
-    programs::{load_program, FdLink, Link, LinkRef, ProgramData, ProgramError},
+    programs::{load_program, FdLink, Link, ProgramData, ProgramError},
     sys::{bpf_link_create, kernel_version, netlink_set_xdp_fd},
 };
 
@@ -68,19 +74,19 @@ bitflags! {
 #[derive(Debug)]
 #[doc(alias = "BPF_PROG_TYPE_XDP")]
 pub struct Xdp {
-    pub(crate) data: ProgramData,
+    pub(crate) data: ProgramData<XdpLink>,
 }
 
 impl Xdp {
     /// Loads the program inside the kernel.
-    ///
-    /// See also [`Program::load`](crate::programs::Program::load).
     pub fn load(&mut self) -> Result<(), ProgramError> {
         self.data.expected_attach_type = Some(bpf_attach_type::BPF_XDP);
         load_program(BPF_PROG_TYPE_XDP, &mut self.data)
     }
 
     /// Attaches the program to the given `interface`.
+    ///
+    /// The returned value can be used to detach, see [Xdp::detach].
     ///
     /// # Errors
     ///
@@ -91,7 +97,7 @@ impl Xdp {
     /// kernels `>= 5.9.0`, and instead
     /// [`XdpError::NetlinkError`] is returned for older
     /// kernels.
-    pub fn attach(&mut self, interface: &str, flags: XdpFlags) -> Result<LinkRef, ProgramError> {
+    pub fn attach(&mut self, interface: &str, flags: XdpFlags) -> Result<XdpLinkId, ProgramError> {
         let prog_fd = self.data.fd_or_err()?;
         let c_interface = CString::new(interface).unwrap();
         let if_index = unsafe { if_nametoindex(c_interface.as_ptr()) } as RawFd;
@@ -111,58 +117,77 @@ impl Xdp {
             )? as RawFd;
             Ok(self
                 .data
-                .link(XdpLink::FdLink(FdLink { fd: Some(link_fd) })))
+                .links
+                .insert(XdpLink::FdLink(FdLink::new(link_fd))))
         } else {
             unsafe { netlink_set_xdp_fd(if_index, prog_fd, None, flags.bits) }
                 .map_err(|io_error| XdpError::NetlinkError { io_error })?;
 
-            Ok(self.data.link(XdpLink::NlLink(NlLink {
+            Ok(self.data.links.insert(XdpLink::NlLink(NlLink {
                 if_index,
-                prog_fd: Some(prog_fd),
+                prog_fd,
                 flags,
             })))
         }
     }
+
+    /// Detaches the program.
+    ///
+    /// See [Xdp::attach].
+    pub fn detach(&mut self, link_id: XdpLinkId) -> Result<(), ProgramError> {
+        self.data.links.remove(link_id)
+    }
 }
 
 #[derive(Debug)]
-struct NlLink {
+pub(crate) struct NlLink {
     if_index: i32,
-    prog_fd: Option<RawFd>,
+    prog_fd: RawFd,
     flags: XdpFlags,
 }
 
 impl Link for NlLink {
-    fn detach(&mut self) -> Result<(), ProgramError> {
-        if let Some(fd) = self.prog_fd.take() {
-            let k_ver = kernel_version().unwrap();
-            let flags = if k_ver >= (5, 7, 0) {
-                self.flags.bits | XDP_FLAGS_REPLACE
-            } else {
-                self.flags.bits
-            };
-            let _ = unsafe { netlink_set_xdp_fd(self.if_index, -1, Some(fd), flags) };
-            Ok(())
+    type Id = (i32, RawFd);
+
+    fn id(&self) -> Self::Id {
+        (self.if_index, self.prog_fd)
+    }
+
+    fn detach(self) -> Result<(), ProgramError> {
+        let k_ver = kernel_version().unwrap();
+        let flags = if k_ver >= (5, 7, 0) {
+            self.flags.bits | XDP_FLAGS_REPLACE
         } else {
-            Err(ProgramError::AlreadyDetached)
-        }
+            self.flags.bits
+        };
+        let _ = unsafe { netlink_set_xdp_fd(self.if_index, -1, Some(self.prog_fd), flags) };
+        Ok(())
     }
 }
 
-impl Drop for NlLink {
-    fn drop(&mut self) {
-        let _ = self.detach();
-    }
-}
+/// The type returned by [Xdp::attach]. Can be passed to [Xdp::detach].
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub struct XdpLinkId(u64);
 
 #[derive(Debug)]
-enum XdpLink {
+pub(crate) enum XdpLink {
     FdLink(FdLink),
     NlLink(NlLink),
 }
 
 impl Link for XdpLink {
-    fn detach(&mut self) -> Result<(), ProgramError> {
+    type Id = XdpLinkId;
+
+    fn id(&self) -> Self::Id {
+        let mut s = DefaultHasher::new();
+        match self {
+            XdpLink::FdLink(link) => link.id().hash(&mut s),
+            XdpLink::NlLink(link) => link.id().hash(&mut s),
+        }
+        XdpLinkId(s.finish())
+    }
+
+    fn detach(self) -> Result<(), ProgramError> {
         match self {
             XdpLink::FdLink(link) => link.detach(),
             XdpLink::NlLink(link) => link.detach(),
